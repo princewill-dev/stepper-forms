@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.utils import timezone
+import random
 
 # Create your models here.
 
@@ -36,3 +38,35 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+class OTP(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    code = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    @classmethod
+    def generate_otp(cls, user):
+        otp = cls.objects.create(
+            user=user,
+            code=''.join([str(random.randint(0, 9)) for _ in range(6)]),
+            expires_at=timezone.now() + timezone.timedelta(minutes=10)
+        )
+        return otp
+
+    def is_valid(self):
+        return timezone.now() <= self.expires_at
+
+    @classmethod
+    def verify_otp(cls, user, code):
+        try:
+            otp = cls.objects.filter(user=user, code=code).latest('created_at')
+            if otp.is_valid():
+                user.is_active = True
+                user.save()
+                otp.delete()
+                return True
+        except cls.DoesNotExist:
+            pass
+        return False

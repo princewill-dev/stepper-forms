@@ -3,11 +3,15 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authtoken.models import Token
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, get_user_model
 from .serializers import RegisterSerializer, CompleteProfileSerializer, LoginSerializer, UserProfileSerializer
 from allauth.account.utils import send_email_confirmation
 from allauth.account.models import EmailConfirmation
 from rest_framework.exceptions import ValidationError, AuthenticationFailed
+from .models import OTP
+from django.core.mail import send_mail
+from django.conf import settings
+from django.utils import timezone
 
 
 
@@ -17,22 +21,66 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             user = serializer.save()
-            send_email_confirmation(request, user, signup=True)
-            return Response({"message": "Verification email sent."}, status=status.HTTP_201_CREATED)
+            otp = OTP.generate_otp(user)
+            self.send_otp_email(user.email, otp.code)
+            return Response({
+                "message": "OTP sent to your email for verification."
+            }, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class EmailConfirmationView(APIView):
+    def send_otp_email(self, email, otp_code):
+        subject = 'Your OTP for Registration'
+        message = f'Your OTP is: {otp_code}. It will expire in 10 minutes.'
+        from_email = settings.DEFAULT_FROM_EMAIL
+        recipient_list = [email]
+        send_mail(subject, message, from_email, recipient_list)
+
+# class EmailConfirmationView(APIView):
+#     def post(self, request, *args, **kwargs):
+#         key = request.data.get('key')
+#         if not key:
+#             return Response({'message': 'Confirmation key is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+#         try:
+#             confirmation = EmailConfirmation.objects.get(key=key)
+#             confirmation.confirm(request)
+#             return Response({'message': 'Your email has been confirmed successfully.'}, status=status.HTTP_200_OK)
+#         except EmailConfirmation.DoesNotExist:
+#             return Response({'message': 'Invalid confirmation key or expired link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+class OTPVerificationView(APIView):
     def post(self, request, *args, **kwargs):
-        key = request.data.get('key')
-        if not key:
-            return Response({'message': 'Confirmation key is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        email = request.data.get('email')
+        otp_code = request.data.get('otp_code')
+        
+        if not email or not otp_code:
+            return Response({'message': 'Email and OTP code are required.'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            confirmation = EmailConfirmation.objects.get(key=key)
-            confirmation.confirm(request)
-            return Response({'message': 'Your email has been confirmed successfully.'}, status=status.HTTP_200_OK)
-        except EmailConfirmation.DoesNotExist:
-            return Response({'message': 'Invalid confirmation key or expired link.'}, status=status.HTTP_400_BAD_REQUEST)
+            User = get_user_model()
+            user = User.objects.get(email=email)
+            
+            # Instead of querying with 'is_valid', check the expiration time
+            otp = OTP.objects.filter(
+                user=user,
+                code=otp_code,
+                expires_at__gt=timezone.now()
+            ).first()
+            
+            if otp:
+                # OTP is valid
+                user.is_verified = True
+                user.is_active = True  # Set is_active to True
+                user.save()
+                otp.delete()  # Remove the used OTP
+                return Response({'message': 'Your email has been verified successfully.'}, status=status.HTTP_200_OK)
+            else:
+                # OTP is invalid or expired
+                return Response({'error': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
+        except User.DoesNotExist:
+            return Response({'message': 'User with this email does not exist.'}, status=status.HTTP_400_BAD_REQUEST)
         
 class LoginView(APIView):
     def post(self, request, *args, **kwargs):
@@ -117,6 +165,7 @@ class DeleteProfileView(APIView):
         return Response({
             "message": "Profile deleted successfully."
         }, status=status.HTTP_204_NO_CONTENT)
+
 
 
 
