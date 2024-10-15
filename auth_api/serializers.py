@@ -70,7 +70,10 @@ class CompleteProfileSerializer(serializers.ModelSerializer):
         if not data.get('phone_number') or not data.get('country') or not data.get('address') or not data.get('city') or not data.get('postal_code'):
             raise serializers.ValidationError("Phone number, country, address, city, and postal code are required.")
         return data
+    
 
-
-
-
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['email', 'full_name', 'phone_number', 'address', 'country', 'city', 'postal_code']
+        read_only_fields = ['email']
